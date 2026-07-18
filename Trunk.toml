@@ -1,0 +1,11 @@
+[build]
+target = "index.html"
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 8080
+open = false
+
+[tools]
+# Pin the standalone Tailwind CLI that trunk downloads for `rel="tailwind-css"`.
+tailwindcss = "3.4.17"

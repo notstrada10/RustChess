@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Slim, theme-matched scrollbars for the move list. */
+.scroll-slim::-webkit-scrollbar {
+  width: 8px;
+}
+.scroll-slim::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-slim::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 8px;
+}
+.scroll-slim {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+
+/* Never allow native image dragging of the piece sprites. */
+img {
+  -webkit-user-drag: none;
+  user-select: none;
+}

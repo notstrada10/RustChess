@@ -1,0 +1,35 @@
+[package]
+name = "rustchess"
+version = "0.1.0"
+edition = "2021"
+description = "A web-based chess playground built entirely in Rust — Leptos + Shakmaty compiled to WebAssembly."
+license = "MIT"
+
+[dependencies]
+leptos = { version = "0.8", features = ["csr"] }
+shakmaty = "0.30"
+console_error_panic_hook = "0.1"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+gloo-timers = { version = "0.4", features = ["futures"] }
+web-sys = { version = "0.3", features = [
+    "Clipboard",
+    "Document",
+    "Element",
+    "EventTarget",
+    "HtmlElement",
+    "HtmlInputElement",
+    "KeyboardEvent",
+    "MouseEvent",
+    "Navigator",
+    "PointerEvent",
+    "ScrollBehavior",
+    "ScrollIntoViewOptions",
+    "ScrollLogicalPosition",
+    "Window",
+] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
