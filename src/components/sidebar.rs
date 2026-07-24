@@ -15,7 +15,7 @@ pub fn StatusBanner() -> impl IntoView {
     let progress = Memo::new(move |_| store.game.with(|g| (g.cursor(), g.history().len() - 1)));
 
     let banner_class = move || {
-        let base = "flex items-center gap-3 rounded-xl border px-4 py-3 text-sm font-medium ";
+        let base = "flex items-center gap-3 rounded-xl border px-4 py-3 text-sm font-medium shadow-lg shadow-slate-950/40 ";
         if in_setup.get() {
             return format!("{base}border-slate-700 bg-slate-900/70 text-slate-300");
         }
@@ -90,7 +90,32 @@ pub fn StatusBanner() -> impl IntoView {
     view! {
         <div class=banner_class>
             {content}
-            <Show when=move || { !in_setup.get() && progress.get().1 > 0 }>
+            <Show when=move || store.thinking.get()>
+                <span class="ml-auto flex items-center gap-2 text-xs font-normal text-emerald-300">
+                    <span class="flex items-end gap-0.5">
+                        <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400"></span>
+                        <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:120ms]"></span>
+                        <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-400 [animation-delay:240ms]"></span>
+                    </span>
+                    "thinking"
+                </span>
+            </Show>
+            <Show when=move || { !store.thinking.get() && store.suggestion.get().is_some() }>
+                <span class="ml-auto flex items-center gap-1.5 text-xs font-medium text-sky-300">
+                    {icons::bulb()}
+                    {move || {
+                        store
+                            .suggestion
+                            .get()
+                            .map(|s| format!("{} ({})", s.san, s.eval))
+                            .unwrap_or_default()
+                    }}
+                </span>
+            </Show>
+            <Show when=move || {
+                !in_setup.get() && !store.thinking.get() && store.suggestion.get().is_none()
+                    && progress.get().1 > 0
+            }>
                 <span class="ml-auto text-xs font-normal text-slate-500">
                     {move || {
                         let (cursor, total) = progress.get();
@@ -108,8 +133,8 @@ pub fn NavControls() -> impl IntoView {
     let at_start = Memo::new(move |_| store.game.with(|g| g.at_start()));
     let at_latest = Memo::new(move |_| store.game.with(|g| g.at_latest()));
 
-    let nav_btn = "flex h-9 flex-1 items-center justify-center rounded-lg border border-slate-700/60 bg-slate-800 text-slate-200 transition-colors hover:bg-slate-700 disabled:pointer-events-none disabled:opacity-30";
-    let aux_btn = "flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700/60 bg-slate-800 text-slate-300 transition-colors hover:bg-slate-700 hover:text-emerald-300";
+    let nav_btn = "flex h-9 flex-1 items-center justify-center rounded-lg border border-slate-700/60 bg-slate-800 text-slate-200 transition hover:bg-slate-700 active:scale-95 disabled:pointer-events-none disabled:opacity-30";
+    let aux_btn = "flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700/60 bg-slate-800 text-slate-300 transition hover:bg-slate-700 hover:text-emerald-300 active:scale-95";
 
     view! {
         <div class="flex items-center gap-1.5">
@@ -150,6 +175,22 @@ pub fn NavControls() -> impl IntoView {
                 {icons::chevrons_right()}
             </button>
             <div class="mx-1 h-6 w-px bg-slate-700/70"></div>
+            <button
+                class=move || {
+                    if store.show_suggestions.get() {
+                        "flex h-9 w-9 items-center justify-center rounded-lg border border-sky-500/50 bg-sky-500/15 text-sky-300 transition hover:bg-sky-500/25 active:scale-95"
+                            .to_string()
+                    } else {
+                        "flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700/60 bg-slate-800 text-slate-500 transition hover:bg-slate-700 hover:text-slate-300 active:scale-95"
+                            .to_string()
+                    }
+                }
+                title="Toggle live engine suggestions (H)"
+                aria-label="Toggle live engine suggestions"
+                on:click=move |_| store.toggle_suggestions()
+            >
+                {icons::bulb()}
+            </button>
             <button class=aux_btn title="Flip board (F)" aria-label="Flip board" on:click=move |_| store.flip()>
                 {icons::flip()}
             </button>
@@ -210,7 +251,7 @@ pub fn MoveList() -> impl IntoView {
     };
 
     view! {
-        <div class="flex min-h-[140px] flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70">
+        <div class="flex min-h-[140px] flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70 shadow-lg shadow-slate-950/40">
             <div class="flex items-center gap-2 border-b border-slate-800 px-4 py-2.5">
                 {icons::list()}
                 <h2 class="text-xs font-semibold uppercase tracking-widest text-slate-400">"Moves"</h2>

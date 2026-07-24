@@ -5,6 +5,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use super::board::ChessBoard;
+use super::engine_panel::EnginePanel;
 use super::fen_bar::FenBar;
 use super::promotion::PromotionModal;
 use super::setup_tray::SetupTray;
@@ -28,6 +29,30 @@ fn typing_in_input(ev: &web_sys::KeyboardEvent) -> bool {
 pub fn App() -> impl IntoView {
     let store = Store::new();
     provide_context(store);
+
+    // Whenever the latest position belongs to the engine, let it think.
+    // Aborted/finished searches flip `thinking` back, re-running this effect.
+    Effect::new(move |_| {
+        if store.engine_should_move() {
+            store.spawn_engine_search();
+        }
+    });
+
+    // Live suggestions: analyse the displayed position whenever the toggle is
+    // on and it's a human's move; `analyzed_gen` stops re-analysing an
+    // unchanged position after the search completes.
+    Effect::new(move |_| {
+        let wanted = store.suggestions_wanted();
+        let analyzing = store.analyzing.get();
+        let gen = store.search_gen.get();
+        if wanted {
+            if !analyzing && store.analyzed_gen.get() != Some(gen) {
+                store.spawn_analysis();
+            }
+        } else if store.suggestion.get_untracked().is_some() {
+            store.suggestion.set(None);
+        }
+    });
 
     // Global keyboard shortcuts: ← → Home End (timeline), Esc, F (flip).
     let handle = window_event_listener(ev::keydown, move |ev| {
@@ -54,6 +79,7 @@ pub fn App() -> impl IntoView {
             }
             "Escape" => store.escape(),
             "f" | "F" => store.flip(),
+            "h" | "H" => store.toggle_suggestions(),
             _ => {}
         }
     });
@@ -61,6 +87,12 @@ pub fn App() -> impl IntoView {
 
     view! {
         <div class="flex min-h-screen flex-col">
+            // Ambient glow backdrop behind everything.
+            <div class="pointer-events-none fixed inset-0 -z-10 overflow-hidden" aria-hidden="true">
+                <div class="absolute -left-40 -top-40 h-[30rem] w-[30rem] rounded-full bg-emerald-500/10 blur-3xl"></div>
+                <div class="absolute -bottom-32 -right-32 h-[26rem] w-[26rem] rounded-full bg-sky-500/10 blur-3xl"></div>
+                <div class="absolute left-1/2 top-1/3 h-[20rem] w-[36rem] -translate-x-1/2 rounded-full bg-emerald-500/5 blur-3xl"></div>
+            </div>
             <Header />
             <main class="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:flex-row lg:items-start lg:justify-center">
                 <section class="mx-auto flex w-full max-w-[600px] flex-col gap-3 lg:mx-0 lg:max-w-[min(620px,calc(100vh_-_230px))]">
@@ -71,6 +103,7 @@ pub fn App() -> impl IntoView {
                     <StatusBanner />
                     {move || match store.mode.get() {
                         AppMode::Play => view! {
+                            <EnginePanel />
                             <NavControls />
                             <MoveList />
                         }
@@ -80,7 +113,7 @@ pub fn App() -> impl IntoView {
                 </aside>
             </main>
             <footer class="border-t border-slate-900 py-4 text-center text-[11px] text-slate-600">
-                "RustChess — 100% Rust · Leptos · Shakmaty · WebAssembly. Piece art by Colin M.L. Burnett (CC BY-SA 3.0). Keys: ← → history, F flip, Esc cancel."
+                "RustChess — 100% Rust · Leptos · Shakmaty · WebAssembly. Piece art by Colin M.L. Burnett (CC BY-SA 3.0). Keys: ← → history, F flip, H engine suggestions, Esc cancel."
             </footer>
             <PromotionModal />
         </div>
@@ -106,9 +139,16 @@ fn Header() -> impl IntoView {
         <header class="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/80 backdrop-blur">
             <div class="mx-auto flex h-14 w-full max-w-6xl items-center gap-4 px-4 sm:px-6">
                 <div class="flex items-center gap-2.5">
-                    <img src="assets/pieces/wN.svg" alt="RustChess" class="h-8 w-8 drop-shadow" />
+                    <img
+                        src="assets/pieces/wN.svg"
+                        alt="RustChess"
+                        class="h-8 w-8 drop-shadow-[0_0_10px_rgba(52,211,153,0.35)]"
+                    />
                     <h1 class="text-lg font-bold tracking-tight">
-                        "Rust" <span class="text-emerald-400">"Chess"</span>
+                        "Rust"
+                        <span class="bg-gradient-to-r from-emerald-400 to-sky-400 bg-clip-text text-transparent">
+                            "Chess"
+                        </span>
                     </h1>
                     <span class="hidden rounded-full border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-widest text-slate-500 sm:inline-block">
                         "Rust · WASM"

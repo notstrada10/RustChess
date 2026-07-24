@@ -1,15 +1,101 @@
 //! Reactive application store: Leptos signals wrapped around the pure
 //! domain logic in [`crate::state`].
 
+use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use shakmaty::{Board, Chess, Color, Move, Position, Role, Square};
+use shakmaty::{san::SanPlus, Board, Chess, Color, Move, Position, Role, Square};
 use wasm_bindgen_futures::JsFuture;
 
+use crate::engine::{position_hash, Level, Search, MATE};
 use crate::state::{
-    click_moves, parse_fen_position, parse_fen_setup, position_fen, setup_fen, setup_position,
-    AppMode, Game, SetupTool,
+    click_moves, display_squares, game_status, parse_fen_position, parse_fen_setup, position_fen,
+    setup_fen, setup_position, AppMode, Game, GameStatus, SetupTool,
 };
+
+/// Nodes searched per main-thread chunk before yielding to the browser.
+const NODE_CHUNK: u64 = 50_000;
+/// Minimum "thinking" time so instant replies still feel deliberate.
+const MIN_THINK_MS: f64 = 350.0;
+/// Fixed strength of the live-suggestion analysis (independent of the
+/// opponent's level — advice should be good advice).
+const ANALYSIS_LEVEL: Level = Level::Hard;
+
+/// Which side(s) the engine controls.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EngineSide {
+    White,
+    Black,
+    /// Engine vs engine: it plays itself while you watch (or browse history).
+    Both,
+}
+
+impl EngineSide {
+    pub const ALL: [EngineSide; 3] = [EngineSide::White, EngineSide::Black, EngineSide::Both];
+
+    pub fn covers(self, color: Color) -> bool {
+        match self {
+            EngineSide::White => color == Color::White,
+            EngineSide::Black => color == Color::Black,
+            EngineSide::Both => true,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EngineSide::White => "White",
+            EngineSide::Black => "Black",
+            EngineSide::Both => "Both",
+        }
+    }
+}
+
+/// A live engine recommendation for the displayed position.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Suggestion {
+    pub from: Square,
+    pub to: Square,
+    pub san: String,
+    /// Evaluation from White's perspective, e.g. "+0.4", "-1.2", "#3".
+    pub eval: String,
+}
+
+/// Format a side-to-move score as a White-perspective eval string.
+fn eval_text(score_stm: i32, turn: Color) -> String {
+    let white = if turn.is_white() {
+        score_stm
+    } else {
+        -score_stm
+    };
+    if white.abs() >= MATE - 200 {
+        let moves = (MATE - white.abs() + 1) / 2;
+        if white > 0 {
+            format!("#{moves}")
+        } else {
+            format!("#-{moves}")
+        }
+    } else {
+        format!("{:+.1}", f64::from(white) / 100.0)
+    }
+}
+
+/// Engine opponent configuration.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EngineConfig {
+    pub enabled: bool,
+    pub plays: EngineSide,
+    pub level: Level,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            plays: EngineSide::Black,
+            level: Level::Medium,
+        }
+    }
+}
 
 /// A pending pawn promotion waiting for the user to pick a piece.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,6 +129,23 @@ pub struct Store {
     pub error: RwSignal<Option<String>>,
     /// Transient "copied to clipboard" indicator.
     pub copied: RwSignal<bool>,
+    /// Live best-move suggestions: analyse the displayed position in the
+    /// background and show the engine's recommendation.
+    pub show_suggestions: RwSignal<bool>,
+    /// Latest analysis result for the displayed position.
+    pub suggestion: RwSignal<Option<Suggestion>>,
+    /// `true` while a suggestion analysis is in flight.
+    pub analyzing: RwSignal<bool>,
+    /// `search_gen` value that the current/last analysis was started for
+    /// (prevents re-analysing an unchanged position).
+    pub analyzed_gen: RwSignal<Option<u64>>,
+    /// Engine opponent settings.
+    pub engine: RwSignal<EngineConfig>,
+    /// `true` while an engine search is in flight.
+    pub thinking: RwSignal<bool>,
+    /// Bumped whenever the game/engine state changes; in-flight searches
+    /// compare against the value they started with and abort when stale.
+    pub search_gen: RwSignal<u64>,
 }
 
 impl Store {
@@ -59,6 +162,13 @@ impl Store {
             fen_draft: RwSignal::new(String::new()),
             error: RwSignal::new(None),
             copied: RwSignal::new(false),
+            show_suggestions: RwSignal::new(false),
+            suggestion: RwSignal::new(None),
+            analyzing: RwSignal::new(false),
+            analyzed_gen: RwSignal::new(None),
+            engine: RwSignal::new(EngineConfig::default()),
+            thinking: RwSignal::new(false),
+            search_gen: RwSignal::new(0),
         }
     }
 
@@ -99,6 +209,11 @@ impl Store {
             return;
         }
         let pos = self.game.with_untracked(|g| g.displayed().pos.clone());
+        // The engine's pieces are not the human's to move.
+        let engine = self.engine.get_untracked();
+        if engine.enabled && engine.plays.covers(pos.turn()) {
+            return;
+        }
         let own_piece = pos
             .board()
             .piece_at(sq)
@@ -316,6 +431,184 @@ impl Store {
     fn clear_transients(&self) {
         self.selected.set(None);
         self.promo.set(None);
+        // Any interaction that lands here changes what the engine should be
+        // looking at, so invalidate in-flight searches.
+        self.search_gen.update(|g| *g = g.wrapping_add(1));
+    }
+
+    // ------------------------------------------------------------------
+    // Engine opponent
+    // ------------------------------------------------------------------
+
+    pub fn set_engine_enabled(&self, enabled: bool) {
+        self.engine.update(|e| e.enabled = enabled);
+        self.search_gen.update(|g| *g = g.wrapping_add(1));
+    }
+
+    pub fn set_engine_side(&self, side: EngineSide) {
+        self.engine.update(|e| e.plays = side);
+        self.search_gen.update(|g| *g = g.wrapping_add(1));
+    }
+
+    pub fn toggle_suggestions(&self) {
+        self.show_suggestions.update(|s| *s = !*s);
+        // Force a fresh analysis even if the position hasn't changed since
+        // the toggle was last on.
+        self.analyzed_gen.set(None);
+    }
+
+    pub fn set_engine_level(&self, level: Level) {
+        self.engine.update(|e| e.level = level);
+        self.search_gen.update(|g| *g = g.wrapping_add(1));
+    }
+
+    /// Tracked: `true` when the engine should start searching the latest
+    /// position. Drives the effect installed in `App`.
+    pub fn engine_should_move(&self) -> bool {
+        let cfg = self.engine.get();
+        cfg.enabled
+            && !self.thinking.get()
+            && self.mode.get() == AppMode::Play
+            && self.game.with(|g| {
+                g.at_latest() && {
+                    let pos = &g.displayed().pos;
+                    cfg.plays.covers(pos.turn())
+                        // Engine-vs-engine games stop at the fifty-move rule
+                        // instead of shuffling forever.
+                        && pos.halfmoves() < 100
+                        && matches!(
+                            game_status(pos),
+                            GameStatus::Turn(_) | GameStatus::Check(_)
+                        )
+                }
+            })
+    }
+
+    /// Displayed position plus the Zobrist keys of the game positions that
+    /// still matter for repetition detection (since the last irreversible
+    /// move).
+    fn snapshot_displayed(&self) -> (Chess, Vec<u64>) {
+        self.game.with_untracked(|g| {
+            let pos = g.displayed().pos.clone();
+            let end = g.cursor() + 1;
+            let start = end.saturating_sub(pos.halfmoves() as usize + 1);
+            let prior: Vec<u64> = g.history()[start..end]
+                .iter()
+                .map(|ply| position_hash(&ply.pos))
+                .collect();
+            (pos, prior)
+        })
+    }
+
+    /// Kick off an asynchronous, chunked engine search for the latest
+    /// position. The search runs on the main thread but yields to the
+    /// browser between node-budget chunks, so the UI stays responsive.
+    pub fn spawn_engine_search(&self) {
+        if self.thinking.get_untracked() {
+            return;
+        }
+        let cfg = self.engine.get_untracked();
+        let (pos, prior) = self.snapshot_displayed();
+        self.thinking.set(true);
+        let gen0 = self.search_gen.get_untracked();
+        let store = *self;
+        spawn_local(async move {
+            let started = js_sys::Date::now();
+            let seed = (started as u64) ^ gen0.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let mut search = Search::new(&pos, prior, cfg.level, seed);
+            let deadline = started + cfg.level.time_budget_ms();
+            loop {
+                if store.search_gen.get_untracked() != gen0 {
+                    // The user changed something; this search is stale.
+                    store.thinking.set(false);
+                    return;
+                }
+                if search.step(NODE_CHUNK) {
+                    break;
+                }
+                if js_sys::Date::now() >= deadline {
+                    break;
+                }
+                TimeoutFuture::new(0).await;
+            }
+            let best = search.take_best();
+            let elapsed = js_sys::Date::now() - started;
+            if elapsed < MIN_THINK_MS {
+                TimeoutFuture::new((MIN_THINK_MS - elapsed) as u32).await;
+            }
+            if store.search_gen.get_untracked() == gen0 {
+                if let Some(m) = best {
+                    store.game.update(|g| {
+                        g.play(m);
+                    });
+                    store.clear_transients();
+                }
+            }
+            store.thinking.set(false);
+        });
+    }
+
+    /// Tracked: `true` when a live suggestion should exist for the displayed
+    /// position. Every viewed position qualifies (including history review)
+    /// except the one the engine opponent is about to play itself — there its
+    /// own search is already running.
+    pub fn suggestions_wanted(&self) -> bool {
+        self.show_suggestions.get() && self.mode.get() == AppMode::Play && {
+            let cfg = self.engine.get();
+            self.game.with(|g| {
+                let pos = &g.displayed().pos;
+                matches!(
+                    game_status(pos),
+                    GameStatus::Turn(_) | GameStatus::Check(_)
+                ) && !(cfg.enabled && cfg.plays.covers(pos.turn()) && g.at_latest())
+            })
+        }
+    }
+
+    /// Analyse the displayed position in the background and publish the best
+    /// move found so far into `suggestion` — refining live as the search
+    /// deepens. Same chunked main-thread scheme as the opponent search.
+    pub fn spawn_analysis(&self) {
+        if self.analyzing.get_untracked() {
+            return;
+        }
+        let (pos, prior) = self.snapshot_displayed();
+        let gen0 = self.search_gen.get_untracked();
+        self.analyzing.set(true);
+        self.analyzed_gen.set(Some(gen0));
+        self.suggestion.set(None);
+        let store = *self;
+        spawn_local(async move {
+            let started = js_sys::Date::now();
+            let seed = (started as u64) ^ gen0.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let mut search = Search::new(&pos, prior, ANALYSIS_LEVEL, seed);
+            let deadline = started + ANALYSIS_LEVEL.time_budget_ms();
+            loop {
+                if store.search_gen.get_untracked() != gen0 {
+                    break; // stale — a fresh analysis will be spawned
+                }
+                let done = search.step(NODE_CHUNK);
+                if let Some((m, score, _)) = search.current_best_line() {
+                    let (from, to) = display_squares(m);
+                    let next = Suggestion {
+                        from,
+                        to,
+                        san: SanPlus::from_move(pos.clone(), m).to_string(),
+                        eval: eval_text(score, pos.turn()),
+                    };
+                    if store.search_gen.get_untracked() == gen0
+                        && store.suggestion.get_untracked().as_ref() != Some(&next)
+                    {
+                        store.suggestion.set(Some(next));
+                    }
+                }
+                if done || js_sys::Date::now() >= deadline {
+                    break;
+                }
+                TimeoutFuture::new(0).await;
+            }
+            store.analyzing.set(false);
+        });
     }
 
     // ------------------------------------------------------------------
@@ -365,5 +658,20 @@ impl Store {
 impl Default for Store {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_side_coverage() {
+        assert!(EngineSide::White.covers(Color::White));
+        assert!(!EngineSide::White.covers(Color::Black));
+        assert!(EngineSide::Black.covers(Color::Black));
+        assert!(!EngineSide::Black.covers(Color::White));
+        assert!(EngineSide::Both.covers(Color::White));
+        assert!(EngineSide::Both.covers(Color::Black));
     }
 }

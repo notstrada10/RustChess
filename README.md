@@ -11,6 +11,21 @@ compiled to WebAssembly and styled with Tailwind CSS.
 - **Play mode** — full rules enforcement via shakmaty: legal-move hints,
   captures, castling (click e1→g1), en passant, promotions (with picker
   modal), check / checkmate / stalemate / insufficient-material detection.
+- **Built-in engine opponent** — a real chess engine written in Rust and
+  compiled into the same WASM binary (no Stockfish blob, no Web Worker):
+  iterative-deepening alpha-beta with quiescence search, a transposition
+  table, MVV-LVA + killer-move ordering, check extensions and a tapered
+  material + piece-square evaluation. Five strength levels from Beginner
+  (shallow + deliberately sloppy) to Max (~3s of search). The search runs
+  in bounded node-count chunks that yield to the browser, so the UI never
+  freezes while it thinks. Pick the engine's color, switch it mid-game, turn
+  it off and use the board two-player — or set it to **Both** and watch it
+  play itself (autoplay stops at game over or the fifty-move rule).
+- **Live engine suggestions** — a toggle (bulb button, or `H`) that analyses
+  the displayed position in the background and draws the engine's best move
+  as an arrow on the board, with the SAN + evaluation in the status banner.
+  It refines in real time as the search deepens, follows you through history
+  review, and stays quiet on the engine opponent's own turn.
 - **Setup mode** — a complete sandbox: a 12-piece palette to stamp pieces onto
   any square, a pointer tool to move pieces, an eraser (right-click also
   erases), side-to-move selector, *Clear board* / *Start position* buttons and
@@ -24,8 +39,9 @@ compiled to WebAssembly and styled with Tailwind CSS.
   the input bar; *Copy* puts it on the clipboard, and pasting any FEN +
   `Enter`/`Load` restores it (graceful errors for invalid strings — the app
   never panics).
-- **Polish** — last-move & check highlights, board flip (`F`), keyboard-first
-  UX, responsive dark "tech" theme, zero-dependency inline SVG icons.
+- **Polish** — legal-move hints, last-move & check highlights, board flip
+  (`F`), suggestions toggle (`H`), keyboard-first UX, responsive dark "tech"
+  theme, zero-dependency inline SVG icons.
 
 ## Prerequisites
 
@@ -55,11 +71,15 @@ src/
 ├── state.rs             # PURE domain logic (no framework): Game timeline,
 │                        #   FEN parse/generate, castling detection, SAN rows,
 │                        #   game status — fully unit-tested natively
-├── store.rs             # Leptos signal store wrapping state.rs + all actions
+├── engine.rs            # PURE chess engine: chunked iterative-deepening
+│                        #   alpha-beta + quiescence + TT — natively tested
+├── store.rs             # Leptos signal store wrapping state.rs + all actions,
+│                        #   incl. the async engine driver (yields per chunk)
 └── components/
     ├── app.rs           # Shell, header, global keyboard shortcuts
     ├── board.rs         # 8×8 CSS-grid board, per-square reactive memos
     ├── sidebar.rs       # Status banner, nav controls, SAN move list
+    ├── engine_panel.rs  # Opponent settings (human/computer, color, level)
     ├── setup_tray.rs    # Piece palette, tools, setup actions
     ├── fen_bar.rs       # FEN input / copy / load
     ├── promotion.rs     # Promotion picker modal

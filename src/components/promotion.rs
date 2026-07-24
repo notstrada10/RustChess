@@ -41,11 +41,11 @@ pub fn PromotionModal() -> impl IntoView {
                         .collect_view();
                     view! {
                         <div
-                            class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm"
+                            class="overlay-fade fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm"
                             on:click=move |_| store.cancel_promotion()
                         >
                             <div
-                                class="flex flex-col items-center gap-4 rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl"
+                                class="modal-pop flex flex-col items-center gap-4 rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl"
                                 on:click=move |ev| ev.stop_propagation()
                             >
                                 <p class="text-sm font-medium text-slate-300">"Promote your pawn to:"</p>

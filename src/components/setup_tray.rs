@@ -72,7 +72,7 @@ pub fn SetupTray() -> impl IntoView {
     let action_btn = "flex items-center justify-center gap-2 rounded-lg border border-slate-700/60 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700";
 
     view! {
-        <div class="flex flex-col gap-4 rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+        <div class="flex flex-col gap-4 rounded-xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-950/40">
             <div>
                 <h2 class="mb-2 text-xs font-semibold uppercase tracking-widest text-slate-400">
                     "Piece palette"

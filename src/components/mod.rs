@@ -2,6 +2,7 @@
 
 mod app;
 mod board;
+mod engine_panel;
 mod fen_bar;
 mod promotion;
 mod setup_tray;
@@ -139,5 +140,20 @@ pub mod icons {
         code,
         "0 0 24 24",
         r#"<path d="M16 18l6-6-6-6"/><path d="M8 6l-6 6 6 6"/>"#
+    );
+    icon!(
+        cpu,
+        "0 0 24 24",
+        r#"<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3"/><path d="M15 1v3"/><path d="M9 20v3"/><path d="M15 20v3"/><path d="M20 9h3"/><path d="M20 15h3"/><path d="M1 9h3"/><path d="M1 15h3"/>"#
+    );
+    icon!(
+        users,
+        "0 0 24 24",
+        r#"<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>"#
+    );
+    icon!(
+        bulb,
+        "0 0 24 24",
+        r#"<path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4.5 12.4c.9.7 1.5 1.6 1.5 2.6h6c0-1 .6-1.9 1.5-2.6A7 7 0 0 0 12 2z"/>"#
     );
 }
